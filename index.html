@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Vocabulary Flashcards</title>
+
+  <!-- Optional external styles if you have them -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Minimal inline CSS so things look sane even without style.css -->
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color:#111; }
+    h1 { margin-bottom: 12px; }
+    label { font-weight: 600; margin-right: 8px; }
+    select, button { font-size: 16px; }
+    .flashcard { width: min(600px, 90vw); height: 280px; margin: 16px auto; perspective: 1200px; }
+    .flashcard-inner { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform .35s ease; border-radius: 16px; }
+    .flashcard-inner.flipped { transform: rotateY(180deg); }
+    .flashcard-front, .flashcard-back {
+      position: absolute; inset: 0; display:flex; align-items:center; justify-content:center;
+      backface-visibility: hidden; -webkit-backface-visibility: hidden;
+      border: 1px solid #ddd; border-radius: 16px; padding: 18px; text-align:center;
+      font-size: clamp(18px, 3.2vw, 28px); background: #fff;
+      box-shadow: 0 8px 22px rgba(0,0,0,.06);
+    }
+    .flashcard-back { transform: rotateY(180deg); background:#fbfbff; }
+    .buttons { display:flex; gap:10px; justify-content:center; margin: 10px 0 18px; }
+    .buttons button { padding:10px 14px; border-radius:12px; border:1px solid #ccc; cursor:pointer; }
+    .study-controls { display:flex; flex-direction:column; gap:8px; align-items:center; margin-top:10px; }
+    .study-controls .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:center; }
+    .study-controls button, .study-controls select {
+      padding:10px 14px; border-radius:12px; border:1px solid #ccc; font-size:16px; cursor:pointer;
+    }
+    #logo { display:block; margin: 20px auto; width:80px; height:auto; opacity:.7; }
+    /* tiny helper for visible error text, if any */
+    .error { white-space: pre-line; color:#b00020; text-align:center; }
+  </style>
+
+  <!-- Icons/manifest (optional, safe to leave as-is if you have these files) -->
+  <link rel="icon" href="logo.png" type="image/png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0b57d0">
+</head>
+
+<body>
+  <h1>Vocabulary Flashcards</h1>
+
+  <div>
+    <label for="daySelector">Select Day:</label>
+    <select id="daySelector"></select>
+  </div>
+
+  <div class="flashcard" id="flashcard">
+    <div class="flashcard-inner" id="flashcardInner">
+      <div class="flashcard-front" id="cardFront">Loading…</div>
+      <div class="flashcard-back" id="cardBack"></div>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="prevBtn">Back</button>
+    <button id="nextBtn">Next</button>
+  </div>
+
+  <!-- Shuffle + Save UI -->
+  <div class="study-controls">
+    <div class="row">
+      <button id="shuffleBtn" title="Shuffle order">🔀 Shuffle</button>
+
+      <label for="modeSelect">Study set:</label>
+      <select id="modeSelect">
+        <option value="all">All</option>
+        <option value="review">To Review</option>
+        <option value="learned">Learned</option>
+      </select>
+
+      <button id="resetProgressBtn" title="Clear saved progress (this Day only)">Reset Progress</button>
+    </div>
+
+    <div class="row">
+      <span>Rate this card:</span>
+      <button id="rateReview"  title="Needs review">❌ To Review</button>
+      <button id="rateLearned" title="I learned it">✅ Learned</button>
+    </div>
+  </div>
+
+  <img id="logo" src="logo.png" alt="Logo">
+
+  <script>
+  window.addEventListener('DOMContentLoaded', () => {
+    // =========================
+    // 0) CONFIG (per student)
+    // =========================
+    // Google Sheet DOCUMENT ID from /d/<DOC_ID>/edit
+    const DOC_ID = '1jSDv7SFaxA6vtCMnDBFSzgT7-uiZo4DeGupzTqAGMfk';
+
+    // Course length → which Day tabs are allowed
+    const COURSE_DAYS = 24; // change to 20, 50, 100, etc.
+
+    // Extra tabs allowed in the app for this student
+    const EXTRA_TABS = [
+      "A-Z Word Bank",
+      "Everyday Phrasal Verbs",
+      "Business Phrasal Verbs",
+      "Proverbs",
+    ];
+
+    // Build the allow-list: Day 1..COURSE_DAYS + extras
+    const ALLOWED = new Set([
+      ...Array.from({ length: COURSE_DAYS }, (_, i) => `Day ${i + 1}`),
+      ...EXTRA_TABS,
+    ]);
+
+    // Guard: catch common mistakes early
+    if (/^https?:\/\//.test(DOC_ID) || /2PACX|\/pub/i.test(DOC_ID)) {
+      alert('DOC_ID must be the ID from /d/<ID>/edit (not a published 2PACX link).');
+      throw new Error('Invalid DOC_ID');
+    }
+
+    // =========================
+    // 1) Known GIDs (master map)
+    // =========================
+    const sheetGIDs = {
+      "Day 1": "0",
+      "Day 2": "852548783",
+      "Day 3": "126894906",
+      "Day 4": "1761125923",
+      "Day 5": "1844825717",
+      "Day 6": "534178421",
+      "Day 7": "876454039",
+      "Day 8": "1618830889",
+      "Day 9": "1258211448",
+      "Day 10": "1303355796",
+      "Day 11": "1650085929",
+      "Day 12": "458078023",
+      "Day 13": "101007692",
+      "Day 14": "1396319710",
+      "Day 15": "1344356017",
+      "Day 16": "905129722",
+      "Day 17": "1213698638",
+      "Day 18": "773486233",
+      "Day 19": "399770021",
+      "Day 20": "1887860545",
+      "Day 21": "1018851803",
+      "Day 22": "1886085882",
+      "Day 23": "909447727",
+      "Day 24": "95175758",
+      "Day 25": "1271613542",
+      "Day 26": "1793940656",
+      "Day 27": "2029826003",
+      "Day 28": "1492775333",
+      "Day 29": "2049510630",
+      "Day 30": "834192092",
+      "Day 31": "477071439",
+      "Day 32": "1531258494",
+      "Day 33": "1717129615",
+      "Day 34": "263522865",
+      "Day 35": "1999821782",
+      "Day 36": "2102078518",
+      "Day 37": "1822688970",
+      "Day 38": "806168720",
+      "Day 39": "1065052384",
+      "Day 40": "633801723",
+      "Day 41": "1097216678",
+      "Day 42": "1342209826",
+      "Day 43": "2131677157",
+      "Day 44": "1028416653",
+      "Day 45": "721598257",
+      "Day 46": "1961316860",
+      "Day 47": "1263895587",
+      "Day 48": "338211451",
+      "Day 49": "307351149",
+      "Day 50": "1008236923",
+      "Day 51": "234687202",
+      "Day 52": "856972323",
+      "Day 53": "595391997",
+      "Day 54": "1436250063",
+      "Day 55": "784598036",
+      "Day 56": "1984733918",
+      "Day 57": "1199818301",
+      "Day 58": "155536836",
+      "Day 59": "1774038716",
+      "Day 60": "2078300140",
+      "Day 61": "52782960",
+      "Day 62": "1183649160",
+      "Day 63": "610062498",
+      "Day 64": "1165166979",
+      "Day 65": "243625767",
+      "Day 66": "1929063167",
+      "Day 67": "1026141864",
+      "Day 68": "1146006921",
+      "Day 69": "1884371313",
+      "Day 70": "449486075",
+      "Day 71": "1697197134",
+      "Day 72": "764153221",
+      "Day 73": "440710172",
+      "Day 74": "354345941",
+      "Day 75": "876892388",
+      "Day 76": "778321173",
+      "Day 77": "134669988",
+      "Day 78": "604869118",
+      "Day 79": "931648882",
+      "Day 80": "817887763",
+      "Day 81": "1984068353",
+      "Day 82": "1131931214",
+      "Day 83": "1456337151",
+      "Day 84": "1581682551",
+      "Day 85": "1115657563",
+      "Day 86": "484316380",
+      "Day 87": "393090069",
+      "Day 88": "392329735",
+      "Day 89": "460969374",
+      "Day 90": "83029604",
+      "Day 91": "1815624102",
+      "Day 92": "941485836",
+      "Day 93": "382756531",
+      "Day 94": "1852889877",
+      "Day 95": "115665328",
+      "Day 96": "2033614326",
+      "Day 97": "2132760898",
+      "Day 98": "283939914",
+      "Day 99": "2033622471",
+      "Day 100": "140942988",
+      "A-Z Word Bank": "244262932",
+      "Everyday Phrasal Verbs": "104187808",
+      "Business Phrasal Verbs": "887218085",
+      "Proverbs": "1337097424",
+    };
+
+    // =========================
+    // 2) Grab UI
+    // =========================
+    const dropdown  = document.getElementById("daySelector");
+    const flashcard = document.getElementById("flashcard");
+    const cardInner = document.getElementById("flashcardInner");
+    const front     = document.getElementById("cardFront");
+    const back      = document.getElementById("cardBack");
+    const prevBtn   = document.getElementById("prevBtn");
+    const nextBtn   = document.getElementById("nextBtn");
+
+    const shuffleBtn = document.getElementById('shuffleBtn');
+    const modeSelect = document.getElementById('modeSelect');
+    const resetBtn   = document.getElementById('resetProgressBtn');
+    const rateReviewBtn  = document.getElementById('rateReview');
+    const rateLearnedBtn = document.getElementById('rateLearned');
+
+    let cards = [];
+    let viewIndexes = [];
+    let currentIndex = 0;
+    let isFlipped = false;
+    let shuffleOn = false;
+
+    // =========================
+    // 3) Flip only on card tap
+    // =========================
+    flashcard.addEventListener("click", (e) => {
+      if (!e.target.closest("button")) {
+        isFlipped = !isFlipped;
+        cardInner.classList.toggle("flipped", isFlipped);
+      }
+    });
+
+    // =========================
+    // 4) Progress storage + migration
+    // =========================
+    const STORAGE_KEY = 'flashcards_progress_v2';
+    const deckKey = () => `deck_${dropdown.value || 'Default'}`;
+    const cardId = (pair) => `${pair[0] || ''}||${pair[1] || ''}`;
+    const loadAll = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } };
+    const saveAll = (data) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    (function migrate(){
+      const all = loadAll(); let changed = false;
+      for (const dk in all) {
+        for (const id in all[dk]) {
+          const st = all[dk][id];
+          if (st && st.rating) {
+            if (st.rating === 'unknown' || st.rating === 'soso') { st.rating = 'review'; changed = true; }
+            else if (st.rating === 'known') { st.rating = 'learned'; changed = true; }
+          }
+        }
+      }
+      if (changed) saveAll(all);
+    })();
+    const getState = (pair) => {
+      const all = loadAll(); const dk = deckKey(); const id = cardId(pair);
+      return (all[dk] && all[dk][id]) || { rating:'review', last:0 };
+    };
+    const setState = (pair, patch) => {
+      const all = loadAll(); const dk = deckKey(); const id = cardId(pair);
+      all[dk] = all[dk] || {};
+      const prior = getState(pair);
+      all[dk][id] = { ...prior, ...patch, ts: Date.now() };
+      saveAll(all);
+    };
+    const resetDeck = () => { const all = loadAll(); delete all[deckKey()]; saveAll(all); };
+
+    // =========================
+    // 5) Filtering + Shuffle
+    // =========================
+    function filteredIndexes(mode) {
+      if (!Array.isArray(cards)) return [];
+      return cards.reduce((acc, p, i) => {
+        const st = getState(p);
+        if (mode === 'all') acc.push(i);
+        else if (mode === 'review'  && st.rating === 'review')  acc.push(i);
+        else if (mode === 'learned' && st.rating === 'learned') acc.push(i);
+        return acc;
+      }, []);
+    }
+    function shuffleArray(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+    function rebuildView(preserveCurrent = false) {
+      const mode = modeSelect.value;
+      const prevPair = cards[viewIndexes[currentIndex] ?? 0];
+      viewIndexes = filteredIndexes(mode);
+      if (viewIndexes.length === 0) viewIndexes = cards.map((_, i) => i);
+      if (shuffleOn) shuffleArray(viewIndexes);
+      if (preserveCurrent && prevPair) {
+        const target = cardId(prevPair);
+        const found = viewIndexes.findIndex(i => cardId(cards[i]) === target);
+        currentIndex = found >= 0 ? found : 0;
+      } else {
+        currentIndex = 0;
+      }
+      renderCurrent();
+    }
+    function renderCurrent() {
+      if (!viewIndexes.length || !cards.length) {
+        front.textContent = "No data available.";
+        back.textContent = "";
+        cardInner.classList.remove("flipped");
+        return;
+      }
+      const idx = viewIndexes[currentIndex] ?? 0;
+      const pair = cards[idx];
+      front.textContent = pair[0] || "";
+      back.textContent  = pair[1] || "";
+      cardInner.classList.toggle("flipped", isFlipped);
+    }
+
+    // =========================
+    // 6) Wire controls
+    // =========================
+    nextBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!viewIndexes.length) return;
+      currentIndex = (currentIndex + 1) % viewIndexes.length;
+      renderCurrent();
+    });
+    prevBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!viewIndexes.length) return;
+      currentIndex = (currentIndex - 1 + viewIndexes.length) % viewIndexes.length;
+      renderCurrent();
+    });
+    shuffleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      shuffleOn = !shuffleOn;
+      shuffleBtn.textContent = shuffleOn ? '🔁 Reshuffle' : '🔀 Shuffle';
+      rebuildView(true);
+    });
+    modeSelect.addEventListener('change', () => rebuildView(true));
+    resetBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm('Clear saved progress for this Day?')) { resetDeck(); rebuildView(false); }
+    });
+    const rate = (rating) => {
+      const idx = viewIndexes[currentIndex] ?? 0;
+      const pair = cards[idx];
+      setState(pair, { rating, last: Date.now() });
+      currentIndex = (currentIndex + 1) % viewIndexes.length;
+      renderCurrent();
+    };
+    rateReviewBtn.addEventListener('click',  (e)=>{ e.stopPropagation(); rate('review');  });
+    rateLearnedBtn.addEventListener('click', (e)=>{ e.stopPropagation(); rate('learned'); });
+
+    // =========================
+    // 7) Loader (TSV first; CSV fallback)
+    // =========================
+    function parseRows(text) {
+      const rows = text.trim().split(/\r?\n/);
+      if (rows.length <= 1) return [];
+      const header = rows[0];
+      const useTab = header.includes('\t');
+      const out = [];
+      for (let i = 1; i < rows.length; i++) {
+        const line = rows[i];
+        if (!line) continue;
+        if (useTab) {
+          const parts = line.split('\t');
+          const word = (parts[0] || '').trim();
+          const def  = (parts[1] || '').trim();
+          if (word && def) out.push([word, def]);
+        } else {
+          const j = line.indexOf(',');
+          const word = j >= 0 ? line.slice(0, j).trim() : '';
+          const def  = j >= 0 ? line.slice(j + 1).trim() : '';
+          if (word && def) out.push([word, def]);
+        }
+      }
+      return out;
+    }
+    function loadByGid(gid) {
+      const base = `https://docs.google.com/spreadsheets/d/${DOC_ID}/pub`;
+      const urlTSV = `${base}?gid=${gid}&single=true&output=tsv`;
+      const urlCSV = `${base}?gid=${gid}&single=true&output=csv`;
+      fetch(urlTSV)
+        .then(r => r.ok ? r.text() : Promise.reject())
+        .catch(() => fetch(urlCSV).then(r => r.text()))
+        .then(text => {
+          cards = parseRows(text);
+          isFlipped = false;
+          cardInner.classList.remove("flipped");
+          rebuildView(false);
+        })
+        .catch(err => {
+          console.error('Load error:', err);
+          front.textContent = "Error loading data.";
+          back.textContent  = "";
+          cardInner.classList.remove("flipped");
+          viewIndexes = [];
+        });
+    }
+
+    // =========================
+    // 8) Discover worksheets (names + gid)
+    // =========================
+    let discoveredMap = {}; // { name: gid }
+    async function fetchWorksheets() {
+      const url = `https://spreadsheets.google.com/feeds/worksheets/${DOC_ID}/public/basic?alt=json`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to fetch worksheet list. Is the sheet "Published to the web"?');
+      const data = await res.json();
+      const entries = (data.feed && data.feed.entry) || [];
+      const out = {};
+      for (const e of entries) {
+        const name = (e.title && e.title.$t) || '';
+        const link = (e.link || []).find(l => /gid=/.test(l.href));
+        const gid = link ? (new URL(link.href)).searchParams.get('gid') : null;
+        if (name && gid) out[name] = gid;
+      }
+      return out;
+    }
+
+    // Build final map for allowed names; prefer discovered GIDs then fallback to hard-coded
+    function effectiveGidMap() {
+      const eff = {};
+      for (const name of ALLOWED) {
+        if (discoveredMap[name]) eff[name] = discoveredMap[name];
+        else if (sheetGIDs[name]) eff[name] = sheetGIDs[name];
+      }
+      return eff;
+    }
+
+    function populateDropdown(effMap) {
+      dropdown.innerHTML = '';
+      const presentNames = Object.keys(effMap).sort((a, b) => {
+        const ma = a.match(/^Day\s+(\d+)/i);
+        const mb = b.match(/^Day\s+(\d+)/i);
+        if (ma && mb) return +ma[1] - +mb[1];
+        if (ma) return -1; if (mb) return 1;
+        return a.localeCompare(b);
+      });
+      for (const name of presentNames) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        opt.dataset.gid = effMap[name];
+        dropdown.appendChild(opt);
+      }
+    }
+
+    // =========================
+    // 9) Day selector
+    // =========================
+    dropdown.addEventListener("change", () => {
+      const gid = dropdown.selectedOptions[0]?.dataset?.gid;
+      if (gid) loadByGid(gid);
+    });
+
+    // =========================
+    // 10) Init (robust with fallback)
+    // =========================
+    (async function init(){
+      try {
+        try {
+          discoveredMap = await fetchWorksheets();
+        } catch (discErr) {
+          console.warn('Worksheet discovery failed; using hard-coded GIDs only.', discErr);
+          discoveredMap = {}; // fallback is fine
+        }
+
+        const eff = effectiveGidMap();
+
+        if (!Object.keys(eff).length) {
+          front.classList.add('error');
+          front.textContent = "No allowed tabs found.\n• Check allow-list (Days 1–24 + extras)\n• Publish the sheet (File → Share → Publish to the web → Entire document)";
+          back.textContent = "";
+          return;
+        }
+
+        populateDropdown(eff);
+
+        let defaultName = 'Day 1';
+        if (!eff[defaultName]) defaultName = Object.keys(eff)[0];
+
+        dropdown.value = defaultName;
+        const gid = eff[defaultName];
+        if (gid) loadByGid(gid);
+      } catch (err) {
+        console.error(err);
+        front.classList.add('error');
+        front.textContent = "Startup error. Open DevTools → Console for details.";
+        back.textContent = "";
+      }
+    })();
+  });
+  </script>
+</body>
+</html>
