@@ -261,12 +261,43 @@
         .catch(err => { console.error('Load error:', err); front.textContent = "Error loading data."; back.textContent  = ""; cardInner.classList.remove("flipped"); viewIndexes = []; });
     }
 
-    // ========= 7) Discover worksheets (names → gid) via your Apps Script =========
-    async function fetchWorksheets() {
-      const url = `${DISCOVERY_URL}?id=${encodeURIComponent(DOC_ID)}`;
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) throw new Error('Worksheet discovery failed.');
-      return await res.json(); // { "Day 1":"0", ..., "Proverbs":"1337..." }
+    // ========= 7) Discover worksheets (names → gid) with robust fallbacks =========
+    async function fetchGidMap() {
+      // 7a) Try your Apps Script (preferred)
+      try {
+        const url = `${DISCOVERY_URL}?id=${encodeURIComponent(DOC_ID)}`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.ok) {
+          const j = await res.json();
+          if (j && Object.keys(j).length) return j;
+        }
+      } catch (e) {
+        console.warn('Apps Script discovery failed:', e);
+      }
+
+      // 7b) Try Google’s public worksheets feed (works if the sheet is Published to web)
+      try {
+        const url = `https://spreadsheets.google.com/feeds/worksheets/${DOC_ID}/public/basic?alt=json`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          const entries = (data.feed && data.feed.entry) || [];
+          const out = {};
+          for (const e of entries) {
+            const name = (e.title && e.title.$t) || '';
+            const link = (e.link || []).find(l => /gid=/.test(l.href));
+            const gid = link ? (new URL(link.href)).searchParams.get('gid') : null;
+            if (name && gid) out[name] = gid;
+          }
+          if (Object.keys(out).length) return out;
+        }
+      } catch (e) {
+        console.warn('Legacy feed discovery failed:', e);
+      }
+
+      // 7c) Last resort: use the hard-coded map in this file
+      console.warn('Using hard-coded sheetGIDs fallback.');
+      return sheetGIDs;
     }
 
     function populateDropdown(map) {
@@ -294,14 +325,14 @@
     // ========= 8) Init =========
     (async function init(){
       try {
-        const discoveredMap = await fetchWorksheets();
+        const discoveredMap = await fetchGidMap();
         const allowedMap = Object.fromEntries(
           Object.entries(discoveredMap).filter(([name]) => ALLOWED.has(name))
         );
 
         if (!Object.keys(allowedMap).length) {
           front.classList.add('error');
-          front.textContent = "No allowed tabs found.\n\nCheck:\n• COURSE_DAYS and EXTRA_TABS\n• Sheet is published (File → Share → Publish to the web → Entire document)";
+          front.textContent = "No allowed tabs found.\n\nCheck:\n• COURSE_DAYS & EXTRA_TABS\n• Sheet is published (File → Share → Publish to the web → Entire document)";
           back.textContent = "";
           return;
         }
